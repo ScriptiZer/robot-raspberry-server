@@ -1,0 +1,6 @@
+gpiozero>=2.0.1
+python-dotenv>=1.0.1
+PyYAML>=6.0.1
+# lgpio is only needed on a real Raspberry Pi with SIMULATION_MODE=false.
+# Install it from apt, not pip: sudo apt install python3-lgpio
+# Creating the venv with --system-site-packages then picks it up.

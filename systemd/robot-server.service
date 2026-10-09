@@ -1,0 +1,22 @@
+[Unit]
+Description=Four-wheel robot control and video server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+SupplementaryGroups=gpio video
+WorkingDirectory=/home/pi/robot-raspberry-server
+EnvironmentFile=-/home/pi/robot-raspberry-server/.env
+ExecStart=/home/pi/robot-raspberry-server/.venv/bin/python /home/pi/robot-raspberry-server/app.py
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=10
+# GPIO / camera access without running the whole process as root.
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

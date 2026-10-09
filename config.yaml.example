@@ -1,0 +1,39 @@
+# Example configuration. Copy to config.yaml and edit.
+# Environment variables override these values.
+# GPIO numbers below are EXAMPLE BCM defaults — verify your wiring.
+
+simulation_mode: true
+control_host: "0.0.0.0"
+control_port: 5000
+video_port: 5001
+control_token: "change-me"
+laptop_ip: "192.168.1.20"
+video_follow_client: true
+video_enabled: true
+watchdog_timeout: 0.5
+camera_device: "/dev/video0"
+video_width: 1280
+video_height: 720
+video_fps: 30
+video_bitrate: "2000k"
+log_level: "INFO"
+steer_slow_factor: 0.45
+in_place_turn_ratio: 1.0
+
+motors:
+  front_left:
+    in1: 17
+    in2: 18
+    pwm: 12
+  front_right:
+    in1: 22
+    in2: 23
+    pwm: 13
+  rear_left:
+    in1: 24
+    in2: 25
+    pwm: 19
+  rear_right:
+    in1: 5
+    in2: 6
+    pwm: 26
