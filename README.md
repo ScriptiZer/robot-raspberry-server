@@ -109,16 +109,81 @@ Values load in this order: built-in defaults → `config.yaml` → environment /
 
 ### Example motor pins (BCM, not physical header numbers)
 
-These are **examples only**:
+This rear-wheel-drive example uses only the two rear motors:
 
 ```text
-front_left:  in1=17 in2=18 pwm=12
-front_right: in1=22 in2=23 pwm=13
-rear_left:   in1=24 in2=25 pwm=19
-rear_right:  in1=5  in2=6  pwm=26
+rear_left:  in1=24 in2=25 pwm=19
+rear_right: in1=5  in2=6  pwm=26
 ```
 
-Override in `config.yaml` under `motors:` or with `MOTOR_FRONT_LEFT_IN1` style env vars.
+Use the BCM numbers shown above; the physical Pi header pins are different. Always verify the mapping before powering the motor driver.
+
+### GPIO wiring reference (rear-wheel drive)
+
+```text
+                               Raspberry Pi (BCM numbering)
+                        +---------------------------------------------+
+                        | GPIO24  GPIO25  GPIO19  GPIO5  GPIO6  GPIO26 |
+                        |   o      o       o      o     o      o     |
+                        +---------------------------------------------+
+                                                  |
+                         common ground  +--------------------------+
+                                          |
+                               +----------------------------+
+                               |  Driver logic / H-bridge    |
+                               |  2-motor rear-wheel driver   |
+                               +----------------------------+
+      rear_left IN1 ───────┐
+      rear_left IN2 ───────┤◄─ GPIO24 / GPIO25 / GPIO19
+      rear_left PWM ───────┘
+
+      rear_right IN1 ──────┐
+      rear_right IN2 ──────┤◄─ GPIO5 / GPIO6 / GPIO26
+      rear_right PWM ──────┘
+
+                               Driver outputs to motors
+                       +-------------------------------+
+                       | RL motor   RR motor           |
+                       +-------------------------------+
+
+                Pi GND ───────────────┬───────────────────────┐
+                                       │
+                               driver logic ground
+
+                motor battery + ──────► driver VM / VCC
+                motor battery - ──────► driver GND / power return
+```
+
+GPIO wiring table:
+
+| Motor      | Driver pin | Pi GPIO BCM | Purpose                               |
+| ---------- | ---------- | ----------- | ------------------------------------- |
+| rear_left  | IN1        | 24          | Left motor forward command            |
+| rear_left  | IN2        | 25          | Left motor reverse command            |
+| rear_left  | PWM        | 19          | Left motor speed control              |
+| rear_right | IN1        | 5           | Right motor forward command           |
+| rear_right | IN2        | 6           | Right motor reverse command           |
+| rear_right | PWM        | 26          | Right motor speed control             |
+| Pi         | GND        | GND         | Shared logic ground with driver       |
+| Driver     | VM / VCC   | -           | Motor battery positive supply         |
+| Driver     | GND        | -           | Motor battery negative / power return |
+
+Wiring details:
+
+- Each motor channel uses a 3-wire control set: `IN1`, `IN2`, and `PWM` (speed control).
+- This setup uses the two rear motors only: `rear_left` and `rear_right`.
+- Use BCM GPIO numbers, not physical header pin numbers.
+- Connect the Raspberry Pi GND and the driver logic ground together so the control signals have a valid reference.
+- Motor power must come from a separate battery or PSU for the motors. Do not power motors from Raspberry Pi 5V.
+- GPIO pins are 3.3 V logic only. The driver board must accept 3.3 V inputs or use the correct level-shifting / logic-voltage arrangement.
+- Keep the motor battery disconnected while you verify the pin map. Only after the wiring is confirmed should you enable the motor supply.
+
+The motor test helper can pulse each motor channel without starting the full server. Run it with the wheels lifted and clear before any live robot movement.
+
+```bash
+python scripts/test_motor.py --motor rear_left --direction forward
+python scripts/test_motor.py --motor all --direction forward --speed 0.15 --duration 0.5
+```
 
 ### Differential steering (tunable)
 
@@ -195,7 +260,7 @@ Check configured motor pins and GPIO access with a brief, low-speed pulse. Keep 
 
 ```bash
 python scripts/test_motor.py --help
-python scripts/test_motor.py --motor front_left --direction forward
+python scripts/test_motor.py --motor rear_left --direction forward
 python scripts/test_motor.py --motor all --direction forward --speed 0.15 --duration 0.5
 ```
 
