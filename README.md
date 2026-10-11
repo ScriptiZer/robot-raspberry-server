@@ -142,7 +142,7 @@ The motor test helper can pulse each motor channel without starting the full ser
 
 ```bash
 python scripts/test_motor.py --motor rear_left --direction forward
-python scripts/test_motor.py --motor all --direction forward --speed 0.15 --duration 0.5
+python scripts/test_motor.py --motor all --direction forward --speed 0.7 --duration 0.5
 ```
 
 ### Differential steering (tunable)
@@ -221,7 +221,7 @@ Check configured motor pins and GPIO access with a brief, low-speed pulse. Keep 
 ```bash
 python scripts/test_motor.py --help
 python scripts/test_motor.py --motor rear_left --direction forward
-python scripts/test_motor.py --motor all --direction forward --speed 0.15 --duration 0.5
+python scripts/test_motor.py --motor all --direction forward --speed 0.7 --duration 0.5
 ```
 
 Check camera detection and supported formats without starting FFmpeg's reconnect loop:

@@ -21,7 +21,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--motor", required=True, choices=(*MOTOR_NAMES, "all"))
     parser.add_argument("--direction", required=True, choices=("forward", "backward"))
-    parser.add_argument("--speed", type=float, default=0.15, help="0.01 to 0.25 (default: 0.15)")
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=0.7,
+        help="ENA/ENB duty from 0.01 to 1.0 (default: 0.7). Below about 0.4 the motor often only beeps.",
+    )
     parser.add_argument("--duration", type=float, default=0.5, help="0.1 to 1 second (default: 0.5)")
     parser.add_argument("--config", type=Path, default=None, help="Path to config.yaml")
     return parser.parse_args()
@@ -29,8 +34,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if not 0.01 <= args.speed <= 0.25:
-        raise SystemExit("--speed must be between 0.01 and 0.25")
+    if not 0.01 <= args.speed <= 1.0:
+        raise SystemExit("--speed must be between 0.01 and 1.0")
     if not 0.1 <= args.duration <= 1.0:
         raise SystemExit("--duration must be between 0.1 and 1 second")
 
@@ -41,6 +46,11 @@ def main() -> int:
     print("LIVE GPIO TEST: selected motor(s) will move briefly.")
     print("Lift the wheels, keep clear, and verify BCM wiring before continuing.")
     print("Remove the L298N ENA jumper (GPIO19) and ENB jumper (GPIO26).")
+    if args.speed < 0.4:
+        print(
+            "Warning: this duty is under 0.4. The L298N drops about 2 V, so the "
+            "motor often beeps at the PWM tone and does not start. Use --speed 0.7 or higher."
+        )
     for name in names:
         pins = config.pin(name)
         in_a, in_b, enable = L298N_PIN_NAMES[name]
