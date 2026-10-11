@@ -1,6 +1,6 @@
 # Raspberry Pi Robot Server
 
-TCP motor-control server and low-latency H.264 UDP video streamer for a four-wheel DC-motor robot.
+TCP motor-control server and low-latency H.264 UDP video streamer for a rear-wheel DC-motor robot.
 
 This project is intended to run on **Raspberry Pi OS** on a **trusted private Wi-Fi network**. Do not expose it to the public internet.
 
@@ -19,10 +19,10 @@ This project is intended to run on **Raspberry Pi OS** on a **trusted private Wi
                      (500 ms failsafe)                /dev/video0
                           |
                     MotorController
-                     FL  FR  RL  RR
+                     rear_left  rear_right
                           |
-                    motor driver ICs
-                    (external battery)
+                    one L298N H-bridge
+                    (external motor battery)
 ```
 
 Control and video use **separate channels**. A lost video packet cannot stop command processing. A lost control socket or a frozen TCP selssion still trips the **watchdog**, which stops every motor.
@@ -36,16 +36,14 @@ Control and video use **separate channels**. A lost video packet cannot stop com
 - **STOP always wins.** On startup, shutdown, disconnect, auth failure, exception, SIGINT/SIGTERM, and watchdog timeout, motors are commanded to stop.
 - If no valid `control` or `stop` packet arrives for **500 ms** (configurable), motors stop even if the TCP connection still looks open.
 
-GPIO numbers in the examples are **not guaranteed to match your board**. Treat them as placeholders until you verify the wiring.
-
-A single L298N provides two independently controlled motor channels, not four. A four-wheel chassis can pair the left motors on one channel and the right motors on the other only if the driver can handle each pair's combined stall current. The current software configuration expects four independent motor channels; do not use it for live motor control with one L298N until the wiring and control mapping are adapted.
+GPIO numbers below are **BCM**. Do not substitute physical header pin numbers in the code or in `config.yaml`.
 
 ## Requirements
 
 - Raspberry Pi OS (Bookworm or later recommended)
 - Python 3.11+
 - USB webcam (typically `/dev/video0`)
-- Four DC motors + one L298N dual H-bridge motor driver module
+- Two DC motors (`rear_left`, `rear_right`) + one L298N dual H-bridge
 - `ffmpeg` and `v4l-utils`
 - Laptop client on the same LAN (`robot-laptop-client`)
 
@@ -107,76 +105,38 @@ Values load in this order: built-in defaults → `config.yaml` → environment /
 | `LOG_LEVEL` | `INFO` | `DEBUG` logs every packet |
 | `LOG_FILE` | empty | Optional rotating log path |
 
-### Example motor pins (BCM, not physical header numbers)
-
-This rear-wheel-drive example uses only the two rear motors:
+### Motor pins (BCM, not physical header numbers)
 
 ```text
-rear_left:  in1=24 in2=25 pwm=19
-rear_right: in1=5  in2=6  pwm=26
+rear_left:  IN1=24  IN2=25  ENA/PWM=19
+rear_right: IN3=5   IN4=6   ENB/PWM=26
 ```
 
-Use the BCM numbers shown above; the physical Pi header pins are different. Always verify the mapping before powering the motor driver.
+`rear_right` is still configured as `in1` / `in2` / `pwm` in code. Those fields connect to L298N **IN3**, **IN4**, and **ENB**.
 
-### GPIO wiring reference (rear-wheel drive)
+### L298N wiring (Raspberry Pi 5)
 
-```text
-                               Raspberry Pi (BCM numbering)
-                        +---------------------------------------------+
-                        | GPIO24  GPIO25  GPIO19  GPIO5  GPIO6  GPIO26 |
-                        |   o      o       o      o     o      o     |
-                        +---------------------------------------------+
-                                                  |
-                         common ground  +--------------------------+
-                                          |
-                               +----------------------------+
-                               |  Driver logic / H-bridge    |
-                               |  2-motor rear-wheel driver   |
-                               +----------------------------+
-      rear_left IN1 ───────┐
-      rear_left IN2 ───────┤◄─ GPIO24 / GPIO25 / GPIO19
-      rear_left PWM ───────┘
+| Signal | BCM GPIO | Physical pin | L298N pin |
+| --- | --- | --- | --- |
+| rear_left direction A | 24 | 18 | IN1 |
+| rear_left direction B | 25 | 22 | IN2 |
+| rear_left PWM | 19 | 35 | ENA |
+| rear_right direction A | 5 | 29 | IN3 |
+| rear_right direction B | 6 | 31 | IN4 |
+| rear_right PWM | 26 | 37 | ENB |
+| ground | GND | 39 | GND |
 
-      rear_right IN1 ──────┐
-      rear_right IN2 ──────┤◄─ GPIO5 / GPIO6 / GPIO26
-      rear_right PWM ──────┘
+Power and jumpers:
 
-                               Driver outputs to motors
-                       +-------------------------------+
-                       | RL motor   RR motor           |
-                       +-------------------------------+
+- Motor battery positive goes to L298N `+12V` / `VM`. Motor battery negative goes to L298N `GND`.
+- Power the Raspberry Pi separately, normally over USB-C. Do **not** connect the L298N `5V` terminal to the Pi.
+- Pi GND (physical pin 39) and L298N GND must be tied together.
+- Remove the ENA jumper cap so GPIO19 can PWM the left channel.
+- Remove the ENB jumper cap so GPIO26 can PWM the right channel.
+- L298N `OUT1` + `OUT2` drive `rear_left`. `OUT3` + `OUT4` drive `rear_right`.
+- GPIO is 3.3 V logic. The L298N must accept 3.3 V inputs, or the logic side needs a proper level shifter. Do not power the motors from the Pi.
 
-                Pi GND ───────────────┬───────────────────────┐
-                                       │
-                               driver logic ground
-
-                motor battery + ──────► driver VM / VCC
-                motor battery - ──────► driver GND / power return
-```
-
-GPIO wiring table:
-
-| Motor      | Driver pin | Pi GPIO BCM | Purpose                               |
-| ---------- | ---------- | ----------- | ------------------------------------- |
-| rear_left  | IN1        | 24          | Left motor forward command            |
-| rear_left  | IN2        | 25          | Left motor reverse command            |
-| rear_left  | PWM        | 19          | Left motor speed control              |
-| rear_right | IN1        | 5           | Right motor forward command           |
-| rear_right | IN2        | 6           | Right motor reverse command           |
-| rear_right | PWM        | 26          | Right motor speed control             |
-| Pi         | GND        | GND         | Shared logic ground with driver       |
-| Driver     | VM / VCC   | -           | Motor battery positive supply         |
-| Driver     | GND        | -           | Motor battery negative / power return |
-
-Wiring details:
-
-- Each motor channel uses a 3-wire control set: `IN1`, `IN2`, and `PWM` (speed control).
-- This setup uses the two rear motors only: `rear_left` and `rear_right`.
-- Use BCM GPIO numbers, not physical header pin numbers.
-- Connect the Raspberry Pi GND and the driver logic ground together so the control signals have a valid reference.
-- Motor power must come from a separate battery or PSU for the motors. Do not power motors from Raspberry Pi 5V.
-- GPIO pins are 3.3 V logic only. The driver board must accept 3.3 V inputs or use the correct level-shifting / logic-voltage arrangement.
-- Keep the motor battery disconnected while you verify the pin map. Only after the wiring is confirmed should you enable the motor supply.
+Stop drives ENA/ENB to duty 0, then both direction pins of that channel low. Forward asserts only the A input (IN1 or IN3). Reverse asserts only the B input (IN2 or IN4). Both direction pins of a channel are never left high.
 
 The motor test helper can pulse each motor channel without starting the full server. Run it with the wheels lifted and clear before any live robot movement.
 
@@ -189,12 +149,12 @@ python scripts/test_motor.py --motor all --direction forward --speed 0.15 --dura
 
 | Command | Wheels |
 | --- | --- |
-| Forward | all forward |
-| Backward | all reverse |
-| Left | left reverse (× `IN_PLACE_TURN_RATIO`), right forward |
-| Right | left forward, right reverse |
-| Forward-left | left × `STEER_SLOW_FACTOR`, right full, both forward |
-| Forward-right | right slower, left full, both forward |
+| Forward | both rear motors forward |
+| Backward | both rear motors reverse |
+| Left | rear_left reverse (× `IN_PLACE_TURN_RATIO`), rear_right forward |
+| Right | rear_left forward, rear_right reverse |
+| Forward-left | rear_left × `STEER_SLOW_FACTOR`, rear_right full, both forward |
+| Forward-right | rear_right slower, rear_left full, both forward |
 | Backward-left / right | same idea in reverse |
 
 ## Control protocol
@@ -354,7 +314,7 @@ Laptop-only GUI test (no Pi): run `python mock_pi_server.py` inside `robot-lapto
 
 1. Leave `SIMULATION_MODE=true` until TCP + video + watchdog are proven.
 2. Disconnect motor power while checking GPIO mapping.
-3. Confirm IN1/IN2/PWM for each of FL, FR, RL, RR.
+3. Confirm rear_left IN1/IN2/ENA (GPIO24/25/19) and rear_right IN3/IN4/ENB (GPIO5/6/26). ENA and ENB jumper caps must be removed.
 4. Confirm driver logic voltage (3.3 V vs 5 V) is compatible with the Pi.
 5. Only then connect the motor battery and set `SIMULATION_MODE=false`.
 

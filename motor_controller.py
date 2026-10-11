@@ -1,8 +1,8 @@
-"""Four-motor differential-drive controller.
+"""Two-channel L298N differential-drive controller for rear_left and rear_right.
 
-GPIO pins are *logic control signals only*. Never power motors from the
-Raspberry Pi. Use a motor driver (L298N, TB6612, etc.) and an external
-battery/PSU, with a shared logic ground between the Pi and the driver.
+GPIO pins are logic signals only. Motor current comes from the L298N supply,
+not from the Raspberry Pi. Share Pi GND with the L298N GND, and do not connect
+the L298N 5V terminal to the Pi.
 """
 
 from __future__ import annotations
@@ -11,10 +11,15 @@ import logging
 import threading
 from typing import Protocol
 
-from config import AppConfig, MotorPins
+from config import L298N_PIN_NAMES, MOTOR_NAMES, AppConfig, MotorPins
 from protocol import ControlCommand
 
 LOGGER = logging.getLogger("motors")
+
+# L298N enable inputs are slow. 1 kHz is fast enough for speed control
+# without asking the driver to switch harder than it can.
+_PWM_FREQUENCY_HZ = 1000
+_SPEED_EPSILON = 0.01
 
 
 class MotorChannel(Protocol):
@@ -26,14 +31,26 @@ class MotorChannel(Protocol):
 
 
 def configure_gpiozero_pin_factory() -> None:
-    try:
-        from gpiozero import Device
-        from gpiozero.pins.lgpio import LGPIOFactory
+    """Select the Pi 5 pin factory. gpiozero pin numbers are BCM, not header pins."""
+    from gpiozero import Device
+    from gpiozero.pins.lgpio import LGPIOFactory
 
-        Device.pin_factory = LGPIOFactory()
-        LOGGER.info("Using gpiozero pin factory: lgpio")
-    except Exception as exc:
-        LOGGER.info("lgpio pin factory not available (%s); using gpiozero default", exc)
+    Device.pin_factory = LGPIOFactory()
+    LOGGER.info("GPIO numbering mode: BCM via lgpio (not physical header pins)")
+
+
+def l298n_outputs(speed: float) -> tuple[bool, bool, float]:
+    """Map a signed speed to (in_a high, in_b high, enable duty).
+
+    Stop is both direction pins low and duty 0. Forward and reverse each
+    assert only one direction pin. Both pins are never left high together.
+    """
+    speed = max(-1.0, min(1.0, float(speed)))
+    if speed > _SPEED_EPSILON:
+        return True, False, speed
+    if speed < -_SPEED_EPSILON:
+        return False, True, -speed
+    return False, False, 0.0
 
 
 class SimulatedMotor:
@@ -49,35 +66,65 @@ class SimulatedMotor:
 
 
 class GpioMotor:
+    """One L298N half of the dual H-bridge.
+
+    ``pins.in1`` / ``pins.in2`` are the direction pair (IN1/IN2 or IN3/IN4).
+    ``pins.pwm`` is the enable input (ENA or ENB) and is always PWM.
+    """
+
     def __init__(self, name: str, pins: MotorPins) -> None:
-        from gpiozero import Motor
+        from gpiozero import DigitalOutputDevice, PWMOutputDevice
 
         self.name = name
-        self._motor = Motor(
-            forward=pins.in1,
-            backward=pins.in2,
-            enable=pins.pwm,
-            pwm=True,
+        # Start disabled: both inputs low, enable duty 0.
+        self._in_a = DigitalOutputDevice(pins.in1, initial_value=False)
+        self._in_b = DigitalOutputDevice(pins.in2, initial_value=False)
+        self._enable = PWMOutputDevice(
+            pins.pwm,
+            frequency=_PWM_FREQUENCY_HZ,
+            initial_value=0.0,
+        )
+        in_a_name, in_b_name, enable_name = L298N_PIN_NAMES[name]
+        LOGGER.info(
+            "%s L298N BCM %s=%s %s=%s %s/PWM=%s at %s Hz",
+            name,
+            in_a_name,
+            pins.in1,
+            in_b_name,
+            pins.in2,
+            enable_name,
+            pins.pwm,
+            _PWM_FREQUENCY_HZ,
         )
 
     def set_speed(self, value: float) -> None:
-        value = max(-1.0, min(1.0, value))
-        if abs(value) < 0.01:
-            self._motor.stop()
-        elif value > 0:
-            self._motor.forward(value)
-        else:
-            self._motor.backward(-value)
+        in_a, in_b, duty = l298n_outputs(value)
+        self._write(in_a, in_b, duty)
 
     def close(self) -> None:
         try:
-            self._motor.stop()
+            self._write(False, False, 0.0)
         finally:
-            self._motor.close()
+            self._enable.close()
+            self._in_a.close()
+            self._in_b.close()
+
+    def _write(self, in_a: bool, in_b: bool, duty: float) -> None:
+        # Disable the bridge before touching direction pins so a stale input
+        # cannot keep the motor running, and so both inputs are never high.
+        self._enable.value = 0.0
+        self._in_a.off()
+        self._in_b.off()
+        if in_a:
+            self._in_a.on()
+        elif in_b:
+            self._in_b.on()
+        if duty > 0.0:
+            self._enable.value = duty
 
 
 class MotorController:
-    """Thread-safe differential drive for FL / FR / RL / RR motors."""
+    """Thread-safe differential drive for the rear_left and rear_right channels."""
 
     def __init__(self, config: AppConfig) -> None:
         self._lock = threading.Lock()
@@ -88,19 +135,25 @@ class MotorController:
         self._last_label = "STOP"
         self._motors: dict[str, MotorChannel] = {}
 
-        order = ("front_left", "front_right", "rear_left", "rear_right")
         try:
             if config.simulation_mode:
                 LOGGER.warning("SIMULATION_MODE enabled: GPIO will not be accessed")
-                self._motors = {name: SimulatedMotor(name) for name in order}
+                self._motors = {name: SimulatedMotor(name) for name in MOTOR_NAMES}
             else:
                 configure_gpiozero_pin_factory()
                 self._motors = {
-                    name: GpioMotor(name, config.pin(name)) for name in order
+                    name: GpioMotor(name, config.pin(name)) for name in MOTOR_NAMES
                 }
                 LOGGER.info(
-                    "GPIO motors initialized (BCM pins, example defaults unless overridden): %s",
-                    {name: config.pin(name) for name in order},
+                    "L298N motors initialized (BCM): %s",
+                    {
+                        name: (
+                            f"{L298N_PIN_NAMES[name][0]}={config.pin(name).in1} "
+                            f"{L298N_PIN_NAMES[name][1]}={config.pin(name).in2} "
+                            f"{L298N_PIN_NAMES[name][2]}={config.pin(name).pwm}"
+                        )
+                        for name in MOTOR_NAMES
+                    },
                 )
         except Exception:
             LOGGER.exception("Motor initialization failed; forcing software stop state")
@@ -131,46 +184,46 @@ class MotorController:
 
     def forward(self, speed: int) -> None:
         s = self._unit(speed)
-        self._drive(s, s, s, s, f"FORWARD speed={speed}")
+        self._drive(s, s, f"FORWARD speed={speed}")
 
     def backward(self, speed: int) -> None:
         s = self._unit(speed)
-        self._drive(-s, -s, -s, -s, f"BACKWARD speed={speed}")
+        self._drive(-s, -s, f"BACKWARD speed={speed}")
 
     def left(self, speed: int) -> None:
         s = self._unit(speed)
         t = s * self._in_place
-        self._drive(-t, s, -t, s, f"TURN LEFT speed={speed}")
+        self._drive(-t, s, f"TURN LEFT speed={speed}")
 
     def right(self, speed: int) -> None:
         s = self._unit(speed)
         t = s * self._in_place
-        self._drive(s, -t, s, -t, f"TURN RIGHT speed={speed}")
+        self._drive(s, -t, f"TURN RIGHT speed={speed}")
 
     def forward_left(self, speed: int) -> None:
         s = self._unit(speed)
         slow = s * self._steer_slow
-        self._drive(slow, s, slow, s, f"FORWARD LEFT speed={speed}")
+        self._drive(slow, s, f"FORWARD LEFT speed={speed}")
 
     def forward_right(self, speed: int) -> None:
         s = self._unit(speed)
         slow = s * self._steer_slow
-        self._drive(s, slow, s, slow, f"FORWARD RIGHT speed={speed}")
+        self._drive(s, slow, f"FORWARD RIGHT speed={speed}")
 
     def backward_left(self, speed: int) -> None:
         s = self._unit(speed)
         slow = s * self._steer_slow
-        self._drive(-slow, -s, -slow, -s, f"BACKWARD LEFT speed={speed}")
+        self._drive(-slow, -s, f"BACKWARD LEFT speed={speed}")
 
     def backward_right(self, speed: int) -> None:
         s = self._unit(speed)
         slow = s * self._steer_slow
-        self._drive(-s, -slow, -s, -slow, f"BACKWARD RIGHT speed={speed}")
+        self._drive(-s, -slow, f"BACKWARD RIGHT speed={speed}")
 
     def stop(self, reason: str = "") -> None:
         with self._lock:
             already = self._stopped
-            self._set_raw(0.0, 0.0, 0.0, 0.0)
+            self._set_raw(0.0, 0.0)
             self._stopped = True
             label = "STOP"
             if reason:
@@ -183,20 +236,18 @@ class MotorController:
         self.stop(reason="shutdown")
         self._safe_close()
 
-    def _drive(self, fl: float, fr: float, rl: float, rr: float, label: str) -> None:
+    def _drive(self, left: float, right: float, label: str) -> None:
         with self._lock:
-            self._set_raw(fl, fr, rl, rr)
+            self._set_raw(left, right)
             self._stopped = False
             if label != self._last_label:
                 self._log_action(label)
             self._last_label = label
 
-    def _set_raw(self, fl: float, fr: float, rl: float, rr: float) -> None:
+    def _set_raw(self, left: float, right: float) -> None:
         mapping = {
-            "front_left": fl,
-            "front_right": fr,
-            "rear_left": rl,
-            "rear_right": rr,
+            "rear_left": left,
+            "rear_right": right,
         }
         for name, value in mapping.items():
             motor = self._motors.get(name)

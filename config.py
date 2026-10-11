@@ -33,14 +33,25 @@ def _load_env_file(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
-# EXAMPLE DEFAULTS ONLY — verify against your motor-driver wiring before use.
-# GPIO numbers are BCM (not physical pin numbers).
+# BCM GPIO numbers (not physical header pins). gpiozero + lgpio use BCM.
+# One L298N dual H-bridge: rear_left on IN1/IN2/ENA, rear_right on IN3/IN4/ENB.
+# Physical header pins are listed only so the BCM numbers are not confused with them.
+#
+# rear_left  -> L298N IN1=GPIO24 (phys 18), IN2=GPIO25 (phys 22), ENA=GPIO19 (phys 35)
+# rear_right -> L298N IN3=GPIO5  (phys 29), IN4=GPIO6  (phys 31), ENB=GPIO26 (phys 37)
+# Pi GND phys 39 -> L298N GND. Do not connect the L298N 5V terminal to the Pi.
 DEFAULT_MOTOR_PINS: dict[str, dict[str, int]] = {
-    "front_left": {"in1": 17, "in2": 18, "pwm": 12},
-    "front_right": {"in1": 22, "in2": 23, "pwm": 13},
     "rear_left": {"in1": 24, "in2": 25, "pwm": 19},
     "rear_right": {"in1": 5, "in2": 6, "pwm": 26},
 }
+
+# Code field names stay in1/in2/pwm. On the right channel those pins are L298N IN3/IN4/ENB.
+L298N_PIN_NAMES: dict[str, tuple[str, str, str]] = {
+    "rear_left": ("IN1", "IN2", "ENA"),
+    "rear_right": ("IN3", "IN4", "ENB"),
+}
+
+MOTOR_NAMES: tuple[str, ...] = tuple(DEFAULT_MOTOR_PINS)
 
 
 @dataclass(frozen=True)
@@ -176,7 +187,7 @@ def load_config(
     yaml_motors = data.get("motors") if isinstance(data.get("motors"), dict) else None
     cfg.motor_pins = _pins_from_mapping(yaml_motors)
 
-    # Optional per-pin overrides: MOTOR_FRONT_LEFT_IN1=17 etc.
+    # Optional per-pin overrides: MOTOR_REAR_LEFT_IN1=24 etc.
     for name in DEFAULT_MOTOR_PINS:
         prefix = f"MOTOR_{name.upper()}_"
         current = cfg.motor_pins[name]

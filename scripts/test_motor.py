@@ -11,17 +11,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from config import load_config
+from config import L298N_PIN_NAMES, MOTOR_NAMES, load_config
 from motor_controller import GpioMotor, configure_gpiozero_pin_factory
-
-MOTORS = ("front_left", "front_right", "rear_left", "rear_right")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Pulse a single configured motor channel without starting the server."
     )
-    parser.add_argument("--motor", required=True, choices=(*MOTORS, "all"))
+    parser.add_argument("--motor", required=True, choices=(*MOTOR_NAMES, "all"))
     parser.add_argument("--direction", required=True, choices=("forward", "backward"))
     parser.add_argument("--speed", type=float, default=0.15, help="0.01 to 0.25 (default: 0.15)")
     parser.add_argument("--duration", type=float, default=0.5, help="0.1 to 1 second (default: 0.5)")
@@ -37,13 +35,18 @@ def main() -> int:
         raise SystemExit("--duration must be between 0.1 and 1 second")
 
     config = load_config(project_root=ROOT, yaml_path=args.config)
-    names = MOTORS if args.motor == "all" else (args.motor,)
+    names = MOTOR_NAMES if args.motor == "all" else (args.motor,)
     sign = 1 if args.direction == "forward" else -1
 
     print("LIVE GPIO TEST: selected motor(s) will move briefly.")
-    print("Lift the wheels, keep clear, and verify wiring/pin numbers first.")
+    print("Lift the wheels, keep clear, and verify BCM wiring before continuing.")
+    print("Remove the L298N ENA jumper (GPIO19) and ENB jumper (GPIO26).")
     for name in names:
-        print(f"  {name}: BCM IN1={config.pin(name).in1} IN2={config.pin(name).in2} PWM={config.pin(name).pwm}")
+        pins = config.pin(name)
+        in_a, in_b, enable = L298N_PIN_NAMES[name]
+        print(
+            f"  {name}: BCM {in_a}={pins.in1} {in_b}={pins.in2} {enable}/PWM={pins.pwm}"
+        )
     if input('Type MOVE to continue: ').strip() != "MOVE":
         print("Cancelled; no motor was moved.")
         return 1

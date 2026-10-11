@@ -1,6 +1,7 @@
 # Example configuration. Copy to config.yaml and edit.
 # Environment variables override these values.
-# GPIO numbers below are EXAMPLE BCM defaults — verify your wiring.
+# GPIO numbers are BCM. rear_left is L298N IN1/IN2/ENA.
+# rear_right in1/in2/pwm are L298N IN3/IN4/ENB.
 
 simulation_mode: true
 control_host: "0.0.0.0"
@@ -21,14 +22,6 @@ steer_slow_factor: 0.45
 in_place_turn_ratio: 1.0
 
 motors:
-  front_left:
-    in1: 17
-    in2: 18
-    pwm: 12
-  front_right:
-    in1: 22
-    in2: 23
-    pwm: 13
   rear_left:
     in1: 24
     in2: 25
